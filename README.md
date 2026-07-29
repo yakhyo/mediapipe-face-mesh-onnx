@@ -135,11 +135,11 @@ None of these checks are wired into the repo, and `mediapipe` is not a dependenc
 
 ## Notes and limitations
 
-- The crop follows MediaPipe's ROI recipe: a square region built from the long side of the detector box scaled by 1.5 (`--margin 0.25`), rotated so the detector's eye keypoints sit level. The model card specifies exactly this — "image of cropped face with 25% margin on each side" — and states the model tolerates only about 10% shift or scale error and 8° of roll, so tight, stretched, or tilted crops make the mesh worse.
-- Each face gets a single pass, matching MediaPipe's static-image flow. MediaPipe's `landmarks_to_roi` step feeds the *next video frame* rather than a second pass over the same image, so it is deliberately not applied here.
-- The 256×256 Face Landmarker is the heavier of the two, 113 against 35 MMac. Google publishes no latency figures for either, and the wall-clock gap on any given target is narrower than that ratio since neither model saturates a modern CPU — benchmark your own hardware. It is an addition, not a replacement: stay on Face Mesh when you do not need irises.
-- MediaPipe's earlier 478-point *attention* model is deliberately not ported. It reaches the same point count by bolting refinement branches onto Face Mesh, which needs three MediaPipe-only TFLite custom ops that no standard runtime can load, and its iris depth is averaged from the eye contour rather than predicted. The Face Landmarker supersedes it.
-- Neither model produces the full blendshape set. Google ships `face_blendshapes.tflite` in the same task bundle for that, and it is not ported here. The Face Landmarker graph does carry a third output that the model card describes as "a limited set of blendshapes that includes cheekPuff and tongueOut"; it is not exported, so `FaceLandmarkerNet` keeps the same two-output contract as `FaceMeshNet`.
+- **Crop geometry matters.** The ROI is a square built from the long side of the detector box, scaled 1.5x (`--margin 0.25`), rotated so the eyes sit level — exactly the "25% margin on each side" the model card specifies. It tolerates only ~10% shift or scale error and 8° of roll, so tight, stretched, or tilted crops degrade the mesh.
+- **One pass per face**, matching MediaPipe's static-image flow. Its `landmarks_to_roi` step feeds the *next video frame*, not a second pass over the same image, so it is deliberately not applied.
+- **Face Landmarker is the heavier of the two**, 113 against 35 MMac, though the wall-clock gap is narrower since neither model saturates a modern CPU. It is an addition, not a replacement.
+- **The older 478-point *attention* model is not ported.** It needs three MediaPipe-only TFLite custom ops that no standard runtime can load, and its iris depth is averaged from the eye contour rather than predicted.
+- **No blendshapes.** Google ships `face_blendshapes.tflite` separately for that. The Face Landmarker graph does carry a third output — the model card calls it "a limited set of blendshapes" — which is not exported, keeping both nets to two outputs.
 
 ## License and attribution
 
