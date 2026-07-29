@@ -23,7 +23,7 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
-from models.model import BlazeFaceNet, FaceMeshNet
+from models.model import BlazeFaceNet, FaceLandmarkerNet, FaceMeshNet
 
 WEIGHTS = Path(__file__).parent / 'weights'
 
@@ -35,6 +35,13 @@ MODELS = {
         (1, 3, 192, 192),
         ['landmarks', 'score'],
         'face_mesh_Nx3x192x192.onnx',
+    ),
+    'facelandmarker': (
+        FaceLandmarkerNet,
+        'face_landmarker_256x256.pt',
+        (1, 3, 256, 256),
+        ['landmarks', 'score'],
+        'face_landmarker_Nx3x256x256.onnx',
     ),
     'blazeface': (
         BlazeFaceNet,
