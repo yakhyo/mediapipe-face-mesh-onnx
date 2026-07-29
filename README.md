@@ -57,11 +57,15 @@ python onnx_inference.py 0 --mesh points                    # full | partial | p
 python onnx_inference.py 0 -m weights/face_landmarker_Nx3x256x256.onnx
 ```
 
-Same clip through this repo and through original MediaPipe:
+Same clip through both models here and through original MediaPipe:
 
-| This repo | Original MediaPipe |
-| :-: | :-: |
-| ![](assets/results/woman_smile.gif) | ![](assets/results/woman_smile_mp.gif) |
+| Face Mesh (468) | Face Landmarker (478) | Original MediaPipe |
+| :-: | :-: | :-: |
+| ![](assets/results/woman_smile.gif) | ![](assets/results/woman_smile_478.gif) | ![](assets/results/woman_smile_mp.gif) |
+
+The irises are the only visible difference between the first two, and they are small
+at this scale — [assets/results/woman_478.jpg](assets/results/woman_478.jpg) shows them
+at full resolution.
 
 ### Python
 
