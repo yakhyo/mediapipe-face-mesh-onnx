@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-__all__ = ['BlazeFaceNet', 'FaceMeshNet']
+__all__ = ['BlazeFaceNet', 'FaceLandmarkerNet', 'FaceMeshNet']
 
 # BatchNorm does not appear here because the released weights have it folded
 # into the convolutions — verified: Google's own .tflite files contain no
@@ -126,6 +126,137 @@ class FaceMeshNet(nn.Module):
         landmarks = self.landmark_head(x)
         score = self.score_head(x)
         return landmarks.reshape(-1, 468, 3), score.reshape(-1, 1)
+
+
+class LandmarkerBlock(nn.Module):
+    """Residual inverted bottleneck of Face Landmarker: PW-reduce -> DW 3x3 -> PW-expand, skip, PReLU.
+
+    Narrow in the middle, unlike `MeshBlock`, which keeps full width through a
+    DW -> PW pair. The activation sits inside the bottleneck, between the reducing
+    1x1 and the depthwise; there is none after the depthwise.
+    """
+
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        hidden = channels // 2
+        self.conv = nn.Sequential(
+            # pw-reduce
+            nn.Conv2d(channels, hidden, kernel_size=1),
+            nn.PReLU(hidden),
+            # dw
+            nn.Conv2d(hidden, hidden, kernel_size=3, padding=1, groups=hidden),
+            # pw-expand
+            nn.Conv2d(hidden, channels, kernel_size=1),
+        )
+        self.act = nn.PReLU(channels)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.act(x + self.conv(x))
+
+
+class LandmarkerDown(nn.Module):
+    """Stride-2 transition of Face Landmarker: 2x2 s2 -> DW 3x3 -> PW 1x1, MaxPool skip, PReLU.
+
+    The 2x2 stride-2 convolution opens the bottleneck instead of a depthwise, and
+    because every resolution here is even it tiles exactly — no padding, unlike the
+    TF-style 'same' padding `MeshDown` needs. The skip is zero-padded along channels
+    when the block widens.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int) -> None:
+        super().__init__()
+        hidden = out_channels // 2
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, hidden, kernel_size=2, stride=2),
+            nn.PReLU(hidden),
+            # dw
+            nn.Conv2d(hidden, hidden, kernel_size=3, padding=1, groups=hidden),
+            # pw-expand
+            nn.Conv2d(hidden, out_channels, kernel_size=1),
+        )
+        self.pool = nn.MaxPool2d(kernel_size=2)
+        self.extra_channels = out_channels - in_channels
+        self.act = nn.PReLU(out_channels)
+
+    def forward(self, x: Tensor) -> Tensor:
+        skip = self.pool(x)
+        if self.extra_channels > 0:
+            skip = F.pad(skip, (0, 0, 0, 0, 0, self.extra_channels))
+        return self.act(self.conv(x) + skip)
+
+
+class FaceLandmarkerNet(nn.Module):
+    """MediaPipe Face Landmarker: 478 dense 3D landmarks from a 256x256 face crop.
+
+    The successor to `FaceMeshNet`. Where MediaPipe's earlier 478-point model bolted
+    attention branches onto the 468-point net — three custom TFLite ops and a five-way
+    merge outside the graph — this one is a single network that predicts all 478 points
+    directly. Landmarks 0-467 keep the Face Mesh topology and ordering, so the same
+    tessellation draws it; 468-477 are the irises.
+
+    Input is (N, 3, 256, 256) RGB in [0, 1]. Returns screen landmarks (N, 478, 3) in
+    256-crop pixels and the face-presence logit (N, 1) — apply sigmoid.
+
+    The graph carries a second, already-sigmoided scalar head alongside that logit.
+    Google's MediaPipe FaceMesh V2 model card lists three outputs — the landmarks, the
+    face flag, and "a limited set of blendshapes that includes cheekPuff and tongueOut",
+    meant to be consumed by the separate Blendshapes model — so that head is most likely
+    the blendshape one. The landmarks do not depend on it, so `conv_presence` is kept
+    here for weight fidelity but left out of `forward`, which preserves the two-output
+    contract `FaceMeshNet` established and the ONNX consumers rely on.
+
+    Model card: https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf
+
+    Example:
+        >>> model = FaceLandmarkerNet()
+        >>> model.load_state_dict(torch.load('weights/face_landmarker_256x256.pt'))
+        >>> landmarks, score = model(x)
+
+    Reference:
+        https://github.com/google-ai-edge/mediapipe
+    """
+
+    NUM_LANDMARKS = 478
+
+    def __init__(self) -> None:
+        super().__init__()
+
+        feature_setting = [
+            # c, n — channels and number of residual blocks per stage
+            [16, 4],
+            [32, 4],
+            [64, 4],
+            [128, 4],
+            [128, 4],
+            [128, 4],
+            [128, 4],
+        ]
+
+        features: list[nn.Module] = [
+            nn.ZeroPad2d((0, 1, 0, 1)),
+            nn.Conv2d(3, 16, kernel_size=3, stride=2),
+            nn.PReLU(16),
+        ]
+        in_channels = 16
+        for stage, (channels, num_blocks) in enumerate(feature_setting):
+            if stage > 0:
+                features.append(LandmarkerDown(in_channels, channels))
+            features.extend(LandmarkerBlock(channels) for _ in range(num_blocks))
+            in_channels = channels
+        self.features = nn.Sequential(*features)
+
+        # Declared in the order the source .tflite emits them, which is the order the
+        # weights were mapped in.
+        self.conv_presence = nn.Conv2d(128, 1, kernel_size=2)
+        self.conv_score = nn.Conv2d(128, 1, kernel_size=2)
+        self.conv_landmarks = nn.Conv2d(128, 3 * self.NUM_LANDMARKS, kernel_size=2)
+
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        x = self.features(x)
+
+        landmarks = self.conv_landmarks(x)
+        score = self.conv_score(x)
+        return landmarks.reshape(-1, self.NUM_LANDMARKS, 3), score.reshape(-1, 1)
 
 
 class BlazeBlock(nn.Module):

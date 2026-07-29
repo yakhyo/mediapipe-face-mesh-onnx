@@ -9,9 +9,16 @@ import time
 import cv2
 import numpy as np
 
-from models import FACEMESH_TESSELATION_FULL, FACEMESH_TESSELATION_PARTIAL, BlazeFace, FaceMesh
+from models import (
+    FACEMESH_TESSELATION_FULL,
+    FACEMESH_TESSELATION_PARTIAL,
+    BlazeFace,
+    FaceMesh,
+)
+from models.tessellation import IRIS_LEFT, IRIS_RIGHT, NUM_MESH_LANDMARKS
 
 MESH_COLOR, POINT_COLOR = (230, 230, 60), (0, 209, 255)  # BGR (cyan mesh, amber points)
+IRIS_COLOR = (60, 60, 255)  # BGR red, so the iris points stand out from the mesh
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,17 +74,36 @@ def parse_args() -> argparse.Namespace:
 
 
 def annotate(image: np.ndarray, landmarks: np.ndarray, mesh_mode: str) -> None:
-    """Draw one face's mesh (tessellation lines and/or landmark points) onto `image`."""
+    """Draw one face's mesh (tessellation lines and/or landmark points) onto `image`.
+
+    Accepts 468 or 478 points. The tessellation indexes only the first 468, which the
+    478-point model keeps in the same order; the irises are drawn separately via
+    IRIS_LEFT / IRIS_RIGHT, with a circle fitted to each.
+    """
     points = np.rint(landmarks[:, :2]).astype(np.int32)
+    mesh = points[:NUM_MESH_LANDMARKS]
+
     if mesh_mode in ('full', 'partial'):
         edges = FACEMESH_TESSELATION_FULL if mesh_mode == 'full' else FACEMESH_TESSELATION_PARTIAL
         for start_idx, end_idx in edges:
-            cv2.line(image, points[start_idx], points[end_idx], MESH_COLOR, 1, cv2.LINE_AA)
+            cv2.line(image, mesh[start_idx], mesh[end_idx], MESH_COLOR, 1, cv2.LINE_AA)
+
+    face_size = mesh[:, 1].max() - mesh[:, 1].min()
+    radius = max(1, round(face_size / 120))
     if mesh_mode in ('partial', 'points'):
-        face_size = points[:, 1].max() - points[:, 1].min()
-        radius = max(1, round(face_size / 120))
-        for x, y in points:
+        for x, y in mesh:
             cv2.circle(image, (x, y), radius, POINT_COLOR, -1, cv2.LINE_AA)
+
+    # Circle each iris and mark its five points. Empty on a 468-point result, so this
+    # is a no-op there rather than a branch.
+    for iris in (points[IRIS_LEFT], points[IRIS_RIGHT]):
+        if len(iris) == 0:
+            continue
+        center = iris[0]
+        iris_radius = round(float(np.linalg.norm(iris[1:] - center, axis=1).mean()))
+        cv2.circle(image, center, max(iris_radius, 1), IRIS_COLOR, 1, cv2.LINE_AA)
+        for x, y in iris:
+            cv2.circle(image, (x, y), max(radius, 2), IRIS_COLOR, -1, cv2.LINE_AA)
 
 
 def run_image(image_path: str, mesher: FaceMesh, detector: BlazeFace, args: argparse.Namespace) -> None:
@@ -142,7 +168,10 @@ def run_webcam(camera_index: int, mesher: FaceMesh, detector: BlazeFace, args: a
         if key in (27, ord('q')):
             break
         if key == ord('s') and args.save_dir:
-            output_path = os.path.join(args.save_dir, f'webcam{camera_index}_{time.strftime("%Y%m%d-%H%M%S")}.jpg')
+            output_path = os.path.join(
+                args.save_dir,
+                f'webcam{camera_index}_{time.strftime("%Y%m%d-%H%M%S")}.jpg',
+            )
             cv2.imwrite(output_path, frame)
             print(f'Saved {output_path}')
 

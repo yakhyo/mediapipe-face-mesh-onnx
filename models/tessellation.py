@@ -3,6 +3,17 @@
 # https://github.com/PINTO0309/facemesh_onnx_tensorrt
 # Original topology: https://github.com/google-ai-edge/mediapipe (Apache License 2.0)
 
+# Points these edges index. The 478-point model keeps the same first 468 in the
+# same order and appends ten iris points, so one edge list draws either model.
+NUM_MESH_LANDMARKS = 468
+
+# The ten extra points of the 478-point model. Each iris is ordered
+# (center, right, top, left, bottom), so the mean distance from point 0 to the other
+# four is its radius. Slicing these out of a 468-point result yields an empty array
+# rather than raising, which is what lets one drawing path serve both models.
+IRIS_LEFT = slice(468, 473)
+IRIS_RIGHT = slice(473, 478)
+
 FACEMESH_TESSELATION_PARTIAL = [
     [0, 267], [7, 163], [10, 338], [13, 312], [14, 317],
     [17, 314], [21, 54], [33, 7], [33, 246], [37, 0],

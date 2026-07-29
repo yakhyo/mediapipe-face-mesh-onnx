@@ -35,6 +35,8 @@ import onnxruntime as ort
 # Session and preprocessing are kept deliberately minimal here — UniFace's base
 # classes take over those concerns when these models are integrated there.
 
+#: Defaults for the 468-point Face Mesh. `FaceMesh` reads the actual values from the
+#: graph it loads, so the 478-point Face Landmarker (256x256) needs no change here.
 NUM_LANDMARKS = 468
 INPUT_SIZE = (192, 192)
 
@@ -66,8 +68,8 @@ def roi_from_box(bbox: np.ndarray, keypoints: np.ndarray | None = None, margin: 
     return (x1 + x2) / 2.0, (y1 + y2) / 2.0, side, angle
 
 
-def warp_roi(image: np.ndarray, roi: Roi) -> tuple[np.ndarray, np.ndarray]:
-    """Sample a rotated square ROI directly at the 192x192 model input size.
+def warp_roi(image: np.ndarray, roi: Roi, size: int = INPUT_SIZE[0]) -> tuple[np.ndarray, np.ndarray]:
+    """Sample a rotated square ROI directly at the model's input resolution.
 
     Single bilinear resampling straight to the model size — mirroring
     MediaPipe's ImageToTensorCalculator, which never materializes an
@@ -78,13 +80,14 @@ def warp_roi(image: np.ndarray, roi: Roi) -> tuple[np.ndarray, np.ndarray]:
     Args:
         image: Full BGR image, shape (H, W, 3).
         roi: The (center_x, center_y, side, angle) ROI to cut.
+        size: Output edge length in pixels; the model's input resolution.
 
     Returns:
-        A tuple of the (192, 192, 3) crop and the inverse 2x3 affine mapping
-        192-crop pixel coordinates back to full-image coordinates.
+        A tuple of the (size, size, 3) crop and the inverse 2x3 affine mapping
+        crop-pixel coordinates back to full-image coordinates.
     """
     cx, cy, side, angle = roi
-    out = INPUT_SIZE[0]
+    out = size
     matrix = cv2.getRotationMatrix2D((cx, cy), angle, out / side)
     matrix[0, 2] += out / 2.0 - cx
     matrix[1, 2] += out / 2.0 - cy
@@ -122,12 +125,17 @@ class FaceMesh:
         options.log_severity_level = 3  # silence CoreML partition warnings
         self.session = ort.InferenceSession(model_path, sess_options=options, providers=providers)
 
-        self.input_name = self.session.get_inputs()[0].name
+        # Read the geometry from the graph rather than hardcoding it, so the same class
+        # serves Face Mesh (468 @ 192) and Face Landmarker (478 @ 256).
+        input_meta = self.session.get_inputs()[0]
+        self.input_name = input_meta.name
+        self.input_size = int(input_meta.shape[2])
+        self.num_landmarks = int(self.session.get_outputs()[0].shape[1])
 
     def _preprocess(self, crop: np.ndarray) -> np.ndarray:
         """Convert a BGR crop into a CHW float32 slice in [0, 1], RGB order."""
-        if crop.shape[:2] != INPUT_SIZE:
-            crop = cv2.resize(crop, INPUT_SIZE)
+        if crop.shape[:2] != (self.input_size, self.input_size):
+            crop = cv2.resize(crop, (self.input_size, self.input_size))
         rgb = crop[:, :, ::-1].astype(np.float32) / 255.0
         return np.transpose(rgb, (2, 0, 1))
 
@@ -144,7 +152,7 @@ class FaceMesh:
     def _run_rois(self, image: np.ndarray, rois: list[Roi]) -> tuple[np.ndarray, np.ndarray]:
         blobs, inverses = [], []
         for roi in rois:
-            crop, inverse = warp_roi(image, roi)
+            crop, inverse = warp_roi(image, roi, self.input_size)
             blobs.append(self._preprocess(crop))
             inverses.append(inverse)
 
@@ -152,7 +160,7 @@ class FaceMesh:
         landmarks = landmarks.astype(np.float64)
         for idx, (roi, inverse) in enumerate(zip(rois, inverses, strict=True)):
             landmarks[idx, :, :2] = landmarks[idx, :, :2] @ inverse[:, :2].T + inverse[:, 2]
-            landmarks[idx, :, 2] *= roi[2] / INPUT_SIZE[0]  # z onto the same image-pixel scale
+            landmarks[idx, :, 2] *= roi[2] / self.input_size  # z onto the same image-pixel scale
         return landmarks.astype(np.float32), scores
 
     def predict(
@@ -180,7 +188,7 @@ class FaceMesh:
             closer) — and face-presence scores with shape (N,) in [0, 1].
         """
         if len(bboxes) == 0:
-            return np.empty((0, NUM_LANDMARKS, 3), dtype=np.float32), np.empty(0, dtype=np.float32)
+            return np.empty((0, self.num_landmarks, 3), dtype=np.float32), np.empty(0, dtype=np.float32)
         if keypoints is not None and len(keypoints) != len(bboxes):
             raise ValueError(f'Got {len(bboxes)} boxes but {len(keypoints)} keypoint sets')
 
