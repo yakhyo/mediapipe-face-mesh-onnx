@@ -51,11 +51,12 @@ def _generate_face_anchors() -> np.ndarray:
     return np.array(anchors)
 
 
-def _weighted_nms(detections: np.ndarray, iou_threshold: float = 0.3) -> np.ndarray:
+def _weighted_nms(detections: np.ndarray, iou_threshold: float = 0.5) -> np.ndarray:
     """MediaPipe's WEIGHTED non-max suppression.
 
     All candidates overlapping the current top detection are averaged,
-    weighted by score — box and keypoints alike.
+    weighted by score — box and keypoints alike. IoU threshold 0.5 matches
+    MediaPipe's NonMaxSuppressionCalculator min_suppression_threshold.
 
     Args:
         detections: Rows of (score, cx, cy, w, h, kp0x, kp0y, ...), normalized.
@@ -137,7 +138,9 @@ class BlazeFace:
         # Outputs in export order: regressors (N, 896, 16) then score logits (N, 896, 1).
         regressors, logits = self.session.run(None, {self.input_name: blob})
 
-        scores = 1.0 / (1.0 + np.exp(-logits[0].ravel().astype(np.float64)))
+        # Clip before sigmoid: MediaPipe's TensorsToDetectionsCalculator applies a
+        # score_clipping_thresh of 100; extreme logits otherwise overflow exp().
+        scores = 1.0 / (1.0 + np.exp(-np.clip(logits[0].ravel().astype(np.float64), -100.0, 100.0)))
         keep = scores >= threshold
         if not keep.any():
             return (

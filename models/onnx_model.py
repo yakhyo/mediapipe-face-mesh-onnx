@@ -74,8 +74,11 @@ def warp_roi(image: np.ndarray, roi: Roi, size: int = INPUT_SIZE[0]) -> tuple[np
     Single bilinear resampling straight to the model size — mirroring
     MediaPipe's ImageToTensorCalculator, which never materializes an
     intermediate crop (a warp-then-resize implementation interpolates twice
-    and quantizes the crop side to whole pixels). Out-of-image regions are
-    zero-padded, like MediaPipe's own cropper.
+    and quantizes the crop side to whole pixels). Out-of-image regions
+    replicate the edge pixel (`cv2.BORDER_REPLICATE`), matching the border
+    mode of MediaPipe's ImageToTensorCalculator for the landmarker ROI warp;
+    cv2's default `BORDER_CONSTANT` (black padding) measurably disagrees
+    with MediaPipe on ROIs crossing the frame.
 
     Args:
         image: Full BGR image, shape (H, W, 3).
@@ -92,7 +95,7 @@ def warp_roi(image: np.ndarray, roi: Roi, size: int = INPUT_SIZE[0]) -> tuple[np
     matrix[0, 2] += out / 2.0 - cx
     matrix[1, 2] += out / 2.0 - cy
 
-    crop = cv2.warpAffine(image, matrix, (out, out))
+    crop = cv2.warpAffine(image, matrix, (out, out), borderMode=cv2.BORDER_REPLICATE)
     return crop, cv2.invertAffineTransform(matrix)
 
 
