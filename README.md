@@ -4,7 +4,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
 
 > [!TIP]
-> The models and functionality in this repository are being integrated into [UniFace](https://github.com/yakhyo/uniface), an all-in-one face analysis toolkit.<br>
+> The models and functionality in this repository are **integrated into [UniFace](https://github.com/yakhyo/uniface)**, an all-in-one face analysis toolkit.<br>
 > [![PyPI Version](https://img.shields.io/pypi/v/uniface.svg)](https://pypi.org/project/uniface/) [![GitHub Stars](https://img.shields.io/github/stars/yakhyo/uniface)](https://github.com/yakhyo/uniface/stargazers)
 
 [MediaPipe Face Mesh](https://github.com/google-ai-edge/mediapipe/wiki/MediaPipe-Face-Mesh) turns a 192×192 face crop into 468 dense 3D landmarks, and every face in an image goes through the model in one batched session call. MediaPipe's own BlazeFace short-range detector is bundled here, so there is no separate detector to wire up.
